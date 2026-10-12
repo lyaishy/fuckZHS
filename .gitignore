@@ -40,6 +40,10 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# ⚠ 上面这条 *.spec 会连 buildozer.spec 一起忽略，但安卓打包必须要它，这里放行
+!buildozer.spec
+# fuckZHS.spec 是桌面版 exe 的打包配置，也要提交
+!fuckZHS.spec
 
 # Installer logs
 pip-log.txt
@@ -139,3 +143,20 @@ dmypy.json
 aiexamAnswer
 AiDownloadCache
 .vscode
+
+# ---- 本机开发 / 安卓打包相关（不要提交）----
+# 工具的本地工作记录，属于个人数据，不往公开仓库推
+.workbuddy/
+# 打包用的隔离环境与中间产物
+.buildenv/
+.buildozer/
+.buildozer_global/
+.buildozer_cache/
+bin/
+_selftest_dir/
+# 本地运行痕迹（含速度 / 代理 / 刷课记录）
+gui_settings.json
+ai_courses.json
+crash.log
+.qr_preview.png
+# 注意：config.example.json 是**要**提交的干净配置模板，故意不忽略

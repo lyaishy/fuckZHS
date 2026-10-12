@@ -53,6 +53,84 @@
 
 ---
 
+## 图形界面（不想记命令就用这个）
+
+本副本额外带了一个 Tkinter 界面, 独立于 `main.py`, 所有刷课动作都是复用
+`fucker.Fucker` 的原有方法, 协议逻辑没有分叉。
+
+- **Windows**: 双击 `start_gui.bat`
+- **其他方式**: `py -3.12 gui.py`（需要一个带 `tkinter` 的 Python）
+
+界面上能做的事:
+
+- 扫码登录 / 复用 `cookies.json` 里保存的登录状态
+- 一键拉取课程列表, 在列表里勾选要刷的课（**不勾选 = 刷全部**）
+- 常用参数: 播放速度（**手动输入任意数值**）、单课时限、完成阈值、代理、目录视图、进度条
+- 实时日志 + 进度条, 以及「停止」按钮（当前这一节跑完就退出）
+- 被验证码拦住时会**弹窗提醒**, 并给出「去电脑端过验证码」的恢复步骤
+- 「AI 课程」页签: 课程 ID / 班级 ID、跳过考试、答题用 AI 的选择
+- 「导出日志」把日志区内容另存一份, 方便排查问题时发出来
+
+界面选项存在 `gui_settings.json`; 拉课程列表时会顺带写好 `execution.json`,
+所以**界面和命令行可以混着用**。
+
+### 日志
+
+界面上发生的每一件事都会记日志, 出口有两个:
+
+- **界面日志区**: 操作记录 `[界面]`、脚本动作 `[执行]`、网络请求 `[请求]`、报错
+- **日志文件**（都在 `logs/`）:
+  - `gui.log` — **合并日志**, 按时间顺序把上面全部内容写在一起, 排查问题看这个最省事
+  - `info.log` / `warning.log` / `error.log` / `debug.log` — 项目原本按级别拆分的日志
+  - `gui-<时间戳>.log` — 点「导出日志」时另外存的快照
+
+### 关于「播放速度」和 `code=-12`（验证码）
+
+**这里的「播放速度」不是浏览器倍速。** 脚本的主循环是「每 1 秒真实时间, 把
+`played_time` 加上 `speed` 秒, 然后每 30 秒把
+`playTimes = played_time - last_submit` 上报一次」。所以 `speed=400` 意味着
+**每 30 秒向服务器声称看了 400×30 = 12000 秒（3.3 小时）**.
+
+真实浏览器最高只有 `1.25`（校内学分课）/ `1.5`（知到共享课）。这个值填得越高,
+服务端越容易判定为异常, 于是 `saveDatabaseIntervalTimeV2` 返回 `code=-12`,
+`fucker.py` 会把它转成 `CaptchaException`。
+
+> **关于填多少**：速度**完全由你自己决定**, 界面不做任何拦截。
+> 实测 `400` 可以正常刷（速度本身不必然触发风控）。留空 = 用网站最大值。
+
+**这个脚本没有解验证码的能力**, 而且 `fuckZhidaoCourse` 内部就把这个异常吞掉了
+直接 `return` —— 也就是说被要求验证码后, **这门课会立刻中断, 后面的视频一个都不会刷**,
+并且状态会一直卡着, 反复重跑也没用（每次都停在同一个视频上）.
+
+**被验证码拦住怎么办**（界面会自动弹窗提醒）:
+
+1. 到**电脑**上登录智慧树（`www.zhihuishu.com`）。
+2. 打开这门课 → 进入正在刷的那一节的播放页。
+3. 手动播放一会儿, 把页面上弹出的验证码过掉（滑块 / 图形 / 短信等）。
+4. 确认进度条在正常往前走, 然后回到本程序**再点一次「开始刷课」**, 就能接着刷。
+   （已经刷上的进度不会丢, 不需要从头再来。）
+
+界面现在能区分「跑完了」和「被验证码/时限中断」, 不会再把它误报成 `√ 完成`；
+被验证码中断时会同时**写日志 + 弹窗提醒**（移动版和桌面版都有）。
+
+日志覆盖的范围:
+
+| 类别 | 内容 | 级别 |
+|---|---|---|
+| 操作 | 每次按钮点击、勾选的课程、填写的参数 | INFO |
+| 执行 | `login` / `fuckCourse` / `fuckVideo` / `fuckAiCourse` / 拉列表 的开始、结束、耗时 | INFO |
+| 请求 | 每一次 HTTP 请求的方法、接口、返回 code、耗时；失败则记下异常 | 成功=详细日志 / 失败=WARNING |
+| 出错 | 完整异常信息（含 traceback 进 `debug.log`） | ERROR |
+
+两个开关（在按钮行右侧）:
+
+- **详细日志（每次网络请求）**: 默认**开**。关掉后逐条请求日志降到 DEBUG,
+  界面上只看得到课程/视频级别的进度, 日志文件里依然完整。
+- **调试日志（含账号密码，勿外传）**: 默认关。开启后项目内部所有 DEBUG 日志
+  （**包含账号密码、cookie 等敏感信息**）都会写进 `logs/`。
+
+---
+
 ## 如何使用
 
 因登陆验证改变**目前仅有二维码登陆可用**
@@ -621,3 +699,228 @@ def sign(p:dict):
 祝您学习像 Anya 一样好, 料理如 Yor 一般出色!
 ![bonus](./images/bonus.jpg)
 (sauce: Pixiv; pid:[97128620](https://www.pixiv.net/en/artworks/97128620)) **_放 GitHub 仓库不能算转载吧?_**
+
+---
+
+## 本副本的改动记录
+
+上游版本 `2.6.3`。以下改动只修明确的逻辑错误, 以及新增图形界面;
+**签名算法、AES 密钥、上报节奏等协议逻辑一律未动**。
+
+### 新增
+
+- `gui.py`: Tkinter 图形界面（见上文「图形界面」）
+- `start_gui.bat`: Windows 双击启动器
+- `gui_settings.json`: 界面选项持久化（自动生成）
+- `logs/gui.log`: 界面 + 脚本的合并日志（按时间顺序，自动生成）
+
+### 修复
+
+| 位置 | 问题 | 影响 |
+| --- | --- | --- |
+| `main.py` | `args.videos` 边遍历边 `remove` | 一门课拥有多个目标视频时, **只会刷第一个**, 其余被静默漏掉 |
+| `main.py` | `--tree_view` / `--progressbar_view` 用 `type=bool` | 传 `False` 得到字符串 `"False"`(真值), 开关反而被打开 |
+| `main.py` | `tree_view = args.x or config.x` | 命令行传 `False` 会被配置里的 `True` 覆盖, 关不掉 |
+| `main.py` | `qrlogin = args.qrlogin or config.qrlogin or True` | 恒为真, 掩盖了「账号密码登录已失效」这一事实; 现在显式固定为二维码并给出提示 |
+| `main.py` | `--noexam` 用 `type=bool` | 同 boolean 参数问题, 已统一为 `strToBool` |
+| `fucker.py` | `fuckAiCourse` 里 `os.get_terminal_size()` 未兜底 | 输出重定向 / `nohup` 下直接崩溃（其他方法都有 try 兜底） |
+| `fucker.py` | `fuckZhidaoVideo` 先读字段再判空 | 视频不存在时抛 KeyError 而不是清晰的 ValueError |
+| `fucker.py` | `PptToTxt` 用 URL 路径拼本地下载路径 | 存在路径穿越（URL 里带 `../` 可写到下载目录之外）; 现改为只取 basename + URL 哈希前缀 |
+| `push.py` | `http://` 且 content 未做 URL 编码 | 推送内容含 `&` 或中文时参数被截断 / 乱码 |
+| `push.py` | bark 用 `quote()` 默认 `safe='/'` | 标题含 `/` 时会把 URL 路径结构撑开 |
+| `push.py` | 推送失败会向上抛异常 | 推送失败反而打断刷课主流程, 现已吞掉异常并打印提示 |
+
+### 行为变化（请注意）
+
+- `--tree_view` / `--progressbar_view` 现在**优先级为 命令行 > 配置文件 > 默认值**。
+  不带参数时行为与原来一致。
+- 推送改用 `https`（pushplus），失败只提示不中断。
+
+### 第二轮：扫码登录两个 bug + 全量日志
+
+| 位置 | 问题 | 影响 |
+| --- | --- | --- |
+| `gui.py` `QrWindow` | 二维码标签用 `width=44, height=20` 创建（**字符**单位）, 一旦 `configure(image=...)`, Tk 改按**像素**解释这两个值 | 280×280 的二维码被裁成约 44×20 像素, 看起来就是**没有二维码** |
+| `gui.py` `QrWindow.close` | 只 `destroy()` 窗口, 不通知主程序 | `busy` 永久为 `True`、`qr_window` 悬空、登录线程仍在后台轮询 → **再点「扫码登录」没有任何反应** |
+| `gui.py` `on_login` | 建窗口 / 起线程没有异常兜底 | 任何一步抛异常都会让 `busy` 卡住, 之后所有按钮全部点不动 |
+| `gui.py` `_qrlogin` 轮询 | 轮询走 `self.session.get`, 不经 `_apiQuery`, 停止钩子覆盖不到 | 关掉二维码窗口后后台仍会继续请求直到二维码过期 |
+| `gui.py` `_worker_run` | 在工作线程里读 `StringVar`/`Listbox` 等 Tk 对象 | 跨线程访问 Tk, 属于隐患（现在改为在主线程取好参数再传进去） |
+| `gui.py` | 只有 `Exception` 才会被记到界面 | `StopRequested` 等 `BaseException` 会让线程静默死掉, 界面永远等不到结果 |
+
+修复方式: 二维码标签改为按自然像素尺寸显示（260×260）+ 居中对齐到主窗口并短暂置顶;
+关窗改为「作废本次登录」——触发取消事件、复位 `busy`、递增代次丢弃过期消息;
+给 `session` 的 HTTP 动词挂停止检查, 使取消能在 0.5 秒内生效;
+所有按钮回调统一包一层异常外壳; 所有线程统一捕获 `BaseException` 并记录完整 traceback。
+
+### 实测结果
+
+- 二维码渲染尺寸: 修复前 **48×24 像素** → 修复后 **260×260 像素**
+- 关闭窗口 → `busy=False`、登录线程 **0.51 秒**内退出、立刻可以重新扫码登录
+- 连续「打开 → 关闭 → 再打开」3 次, 每次都正常出码
+- session 停止钩子: 停止状态下请求被拦下; 未停止时不误伤（真实请求正常发出）
+- 日志: `logs/gui.log` 按时间顺序记录 界面操作 / 执行动作 / 网络请求 / 报错
+
+### 第三轮：速度手动输入 / 撤掉速度警告 / 验证码提醒 / 日志补全
+
+| 位置 | 改动 | 说明 |
+| --- | --- | --- |
+| `gui.py` | `_confirm_speed` → `_note_speed` | 删掉「速度偏高」确认弹窗, 改为只记一条日志。**速度不再被拦截**（实测 400 可用） |
+| `gui.py` | 速度输入框提示文案 | 改为「留空 = 网站最大值（1.25 / 1.5）；可手动填任意数值，如 400」 |
+| `gui.py` | `_abort_help("captcha")` | 重写为「去**电脑**端过的分步指引」, 不再归因于速度 |
+| `gui.py` | 新增队列消息 `("alert", title, text)` | 被验证码拦住时在主线程**弹窗提醒**（messagebox 只能在主线程调用） |
+| `mobile_core.py` | `SPEED_WARN_ABOVE` / `SPEED_BROWSER_MAX` 删除 | `check_speed()` 只做「非数字 → 按留空处理」, 恒返回 `True` |
+| `mobile_core.py` | 新增 `captcha_alert_text()` / `CAPTCHA_ALERT_TITLE` | 验证码提醒文案统一出口 |
+| `mobile_core.py` | 新增 `Core.act()` | 与桌面版 `_act` 对齐, 所有按钮点击都留痕 |
+| `mobile_core.py` | `glog()` 写文件时补时间戳与级别 | 桌面版与手机版的日志格式统一为 `时间 [级别] 内容` |
+| `gui_mobile.py` | `Slider` → `TextInput(input_filter="float")` | 播放速度改为**手动输入**任意数值 |
+| `gui_mobile.py` | 新增 `AlertPopup` | 验证码提醒弹窗 |
+| `gui_mobile.py` | 布局改为 `size_hint_x=1` 自适应 | 去掉写死的 `dp(306)` / `dp(348)` 宽度; 修复「课程名偏右」、卡片高度不合理 |
+| `gui_mobile.py` | `FlatButton` 加描边 + `disabled_color` | 修复「停止」按钮在浅色底上几乎隐形 |
+| `gui_mobile.py` | 三个 `StringProperty` 补绑定 | 修复 `登录状态 / 课程数 / 状态栏` **永远不刷新**的 bug（`vlabel` 只写了一次 `text`） |
+| `gui.py` + `mobile_core.py` | 成功日志前缀 `✓` → `√` | `✓`(U+2713) 在 CJK 字体里缺字, 手机上显示成方框 |
+
+> 顺带修掉一个一直存在、但没被发现的 bug：`gui_mobile.py` 里
+> `login_label` / `course_label` / `status_label` 是用 `vlabel(self.xxx_text, ...)` 建的，
+> 而 `vlabel` 只在构造时写一次 `text`，没有绑定 Kivy 属性。
+> 于是这三个位置**从头到尾都停在初始值**（"未登录" / "我的课程" / "就绪"），
+> 现在都补上了 `self.bind(<prop>, ...)`。
+
+### 实测结果（第三轮）
+
+- `mobile_core` 单测: 速度 `400 / 3.5 / abc / 留空 / None` **全部放行**, `abc` 只给纠正提示
+- 移动端界面回归 `tests/test_mobile_ui.py`: **18/18 通过**
+  （布局无溢出、速度手动输入、无速度弹窗、alert 弹窗、日志回流、busy 联动、课程渲染）
+- 端到端 `tests/test_mobile_e2e.py`: **11/11 通过**
+  （`speed=400` 真的传到 fucker、验证码中断触发弹窗、日志含电脑端恢复指引、留空 → `speed=None`）
+- 桌面版 `gui.py --selftest` → `SELFTEST OK`; 打包后的 `dist/fuckZHS.exe --selftest` → `SELFTEST OK`
+- 界面渲染实测（`tests/make_mobile_preview.py`）: 见 `手机版界面预览.png`
+
+
+---
+
+## 打包成 exe 发给别人（对方无需安装 Python）
+
+### 一键打包
+
+双击 **`build_exe.bat`**，等 2~5 分钟，产物在 `dist\fuckZHS.exe`（单文件，约 31 MB）。
+
+脚本做的事：
+1. 找一个带 tkinter 的 Python 3.10+；
+2. 建一个独立环境 `.buildenv`（`--system-site-packages`，继承已装依赖，**不动系统 Python**）；
+3. 在里面装 PyInstaller，按 `fuckZHS.spec` 打包。
+
+想手动打包也可以用：
+```bat
+.buildenv\Scripts\python.exe -m PyInstaller --clean --noconfirm fuckZHS.spec
+```
+
+### 打包前必须知道的一个坑
+
+原来的 `utils.getDir()` 和 `gui.py` 的 `ROOT` 都用 `__file__` 定位数据目录。
+打成 onefile 后 `__file__` 指向临时解压目录 `_MEIxxxxxx`，往那里写的
+`cookies.json` / `logs/` **进程一退出就被删掉**，表现就是"每次打开都要重新扫码"。
+
+现已改为「打包感知」：
+
+| 运行方式 | 可写数据目录 |
+| --- | --- |
+| 源码运行（`py gui.py`） | 脚本所在目录 |
+| exe 运行 | **exe 所在目录** |
+| exe 目录不可写（如 `C:\Program Files`） | `%APPDATA%\fuckZHS` |
+
+`utils.getDir()` 与 `gui.py::_resolve_root()` 两处规则保持一致，别只改一处。
+
+### 其他打包相关的改动
+
+- `fucker.py` 的 `tiktoken.encoding_for_model("gpt-4")` 需要 `tiktoken_ext`，
+  spec 里用 `collect_all` + PyInstaller 内置 hook 一起收进去了；
+  词表文件是**首次使用时联网下载**的，属正常（本工具本来就要联网）。
+- `gui.py` 新增 `_ensure_std_streams()`：无控制台模式下 `sys.stdout` 为 `None`，
+  不补一个空实现的话 `print` 会直接抛异常。
+- `gui.py` 新增 `_fatal()` + `sys.excepthook`：窗口模式下崩溃不再是"闪退"，
+  而是弹窗提示 + 写入 `crash.log`。
+- spec 里 `excludes` 掉了 numpy/pandas/matplotlib 等用不到的库来瘦身。
+
+### 交付给"电脑小白"
+
+`dist\fuckZHS-发给小白.zip` 里只有两样东西：
+
+- `fuckZHS.exe` —— 双击即用；
+- `发布说明.txt` —— 面向零基础用户的图文说明（解压、蓝色弹窗放行、扫码、速度别乱填、看 logs）。
+
+另外提醒：微信/QQ/邮箱常直接拦截 `.exe`，所以发 **zip** 比发裸 exe 更容易成功。
+注意**不要**把自己的 `cookies.json` 一起发出去（那是你的登录状态）。
+
+---
+
+## 安卓版（Kivy + Buildozer）
+
+桌面版（`gui.py`）在安卓上**跑不起来**，也**不该**跑：它依赖 Tkinter（python-for-android
+的 tkinter 支持基本不可用），而且用了标签页 + 树形列表 + 固定 1040×800 窗口，
+在手机上完全不成立。所以安卓版是**单独的一层**，桌面版一行未动。
+
+### 文件分工
+
+| 文件 | 作用 |
+| --- | --- |
+| `mobile_core.py` | 平台无关的**业务核心**：登录、课程列表、刷课、停止、日志、中断汇报。不导入任何 GUI 库 |
+| `gui_mobile.py` | Kivy 界面，只负责「画界面 + 消费消息队列」 |
+| `buildozer.spec` | p4a/buildozer 打包配置 |
+| `Dockerfile` + `docker-build.sh/.bat` | Linux 构建环境（buildozer 不支持 Windows 原生） |
+
+**关键设计**：业务逻辑全在 `mobile_core.py`，界面通过 `Core.msg_queue` 收消息。
+这样逻辑可以**在 Windows 上直接跑测试**，不必先打出 APK 才知道对不对。
+
+### 消息协议
+
+界面按 `item[0]` 分派：
+
+```
+("log",     level, text)      日志（含核心/网络层回流的所有日志）
+("qr",      png_bytes)        二维码
+("login",   ok, msg)          登录结果
+("courses", [{name,id,kind}]) 课程列表
+("busy",    busy, task)       忙闲状态
+("status",  text)             状态栏
+("done",    ok, msg)          一次任务结束
+```
+
+### 与桌面版共享的数据
+
+两个界面读写**同一批文件**：`config.json`、`cookies.json`、`gui_settings.json`、
+`execution.json`、`logs/`。所以电脑上登录过，手机装上就能直接「用上次登录」——
+但前提是把这个 `cookies.json` 一起拷过去（**注意：那是你的登录凭证，别随便发给别人**）。
+
+### 安卓适配改动（都在 `utils.py`）
+
+1. **数据目录**：`getDir()` 新增 Android 分支。APK 是沙箱应用，只有应用私有目录可写，
+   通过 `ANDROID_ARGUMENT` / `P4A_BOOTSTRAP` 判定，落到 `ANDROID_PRIVATE`。
+   卸载才会清空。exe 分支另外加了 `sys.platform != "android"` 守卫。
+2. **终端宽度**：新增 `terminal_width(default=80)`。`fucker.py` 里原有 **3 处**
+   各自 try/except 的 `os.get_terminal_size()`（视频/文件/AI 三条路径），
+   全部改为走这个函数。安卓上没有终端，原写法必然抛异常，而且位置就在刷课主循环里。
+
+### 构建
+
+```bash
+# Linux/WSL2
+bash docker-build.sh
+```
+```bat
+:: Windows（需先装并启动 Docker Desktop）
+docker-build.bat
+```
+
+首次会下载 Android SDK/NDK（数 GB，30~60 分钟），之后有缓存。
+
+### ⚠️ 安卓上必须知道的限制
+
+**系统会杀掉长时间后台运行的应用。** 刷完一门课要几小时，安卓的省电策略
+（尤其小米/华为/OPPO 等国产系统）可能冻结应用，导致刷到一半无声停止。
+对策：
+
+- 界面启动时会申请 `WAKE_LOCK`（阻止休眠）；
+- 但仍建议**保持屏幕常亮、不要切走太久**；
+- 别指望它像电脑上那样挂一夜。
+
+这不是代码能彻底解决的问题，是安卓的后台限制。

@@ -1,4 +1,22 @@
+# -*- coding: utf-8 -*-
 import os
+import sys
+
+# ---------------------------------------------------------------------------
+# 安卓入口分发
+# ---------------------------------------------------------------------------
+# python-for-android 只会执行应用目录下的 main.py，入口名不可配置，
+# 所以这里在最前面判断运行环境：命中安卓就直接拉起 Kivy 界面并结束，
+# 完全不 import argparse / fucker 等桌面端依赖。
+#
+# 桌面端这两个环境变量不存在，条件恒为假，行为与改动前 100% 一致。
+if os.environ.get("ANDROID_ARGUMENT") or os.environ.get("P4A_BOOTSTRAP"):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from gui_mobile import MobileApp
+
+    MobileApp().run()
+    sys.exit(0)
+
 import re
 import json
 import argparse
@@ -80,6 +98,16 @@ else:
     with open(getConfigPath(), 'w') as f:
         json.dump(config, f, indent=4)
 
+def strToBool(v):
+    """把命令行字符串转成 bool, 用于支持 `--flag False` 这种写法
+
+    原本 `type=bool` 会把字符串 "False" 判成真值, 是个反直觉的坑
+    """
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
 # parse arguments
 parser = argparse.ArgumentParser(prog="ZHS Fucker")
 parser.add_argument("-c", "--course", type=str, nargs="+",
@@ -105,30 +133,38 @@ parser.add_argument("--show_in_terminal",
                     action="store_true", help="Show QR in terminal")
 parser.add_argument("--proxy", type=str,
                     help="Proxy Config, e.g: http://127.0.0.1:8080")
-parser.add_argument("--tree_view", type=bool,
-                    help="print the tree progress view of the course")
-parser.add_argument("--progressbar_view", type=bool,
-                    help="print the progressbar view of the course")
+parser.add_argument("--tree_view", type=strToBool, nargs="?", const=True, default=None,
+                    help="print the tree progress view of the course, e.g. --tree_view False")
+parser.add_argument("--progressbar_view", type=strToBool, nargs="?", const=True, default=None,
+                    help="print the progressbar view of the course, e.g. --progressbar_view False")
 parser.add_argument("--image_path", type=str,
                     help="Image save path, default is empty (do not save)")
 parser.add_argument("-ai", "--aicourse", type=str, nargs=2,
                     metavar=('COURSE_ID', 'CLASS_ID'),
                     help="AI Course ID and CLASS ID to fuck aiCourse")
 
-parser.add_argument("--noexam", type=bool,
-                    help="Disable AI exam")
+parser.add_argument("--noexam", type=strToBool, nargs="?", const=True, default=False,
+                    help="Disable AI exam, e.g. --noexam True")
 
 args = parser.parse_args()
 
 course = args.course
 username = args.username or config.username
 password = args.password or config.password
-qrlogin = args.qrlogin or config.qrlogin or True  # Force enabled for v2.3.*
+# 智慧树已停用账号密码登录接口, 二维码登录是当前唯一可用方式
+# 这里固定走二维码, 避免 `x or y or True` 这种恒为真的写法掩盖问题
+qrlogin = True
+if not args.qrlogin and (username or password):
+    print("*注意: 账号密码登录已失效, 将改用二维码登录")
 save_cookies = config.save_cookies or False
 qr_extra = config.qr_extra or ObjDict(default=None)
 show_in_terminal = args.show_in_terminal or config.qr_extra.show_in_terminal
-tree_view = args.tree_view or config.tree_view
-progressbar_view = args.progressbar_view or config.progressbar_view
+# 视图开关取值顺序: 命令行 > 配置文件 > 默认值
+# 旧写法 `args.x or config.x` 有两个问题:
+#   1) 命令行传 False 时会被配置里的 True 覆盖, 关不掉
+#   2) 配合 type=bool 时字符串 "False" 会被当成真值
+tree_view = config.tree_view if args.tree_view is None else args.tree_view
+progressbar_view = config.progressbar_view if args.progressbar_view is None else args.progressbar_view
 image_path = args.image_path or config.image_path
 if show_in_terminal is None:
     # Defaults to terminal in Windows
@@ -267,10 +303,7 @@ if args.aicourse:
             print(f"配置错误: {e}")
             exit(1)
 
-        if args.noexam:
-            no_exam = True
-        else:
-            no_exam = False
+        no_exam = bool(args.noexam)
 
         fucker.fuckAiCourse(course_id, class_id, aiConfig=config.ai, no_exam = no_exam)
     except Exception as e:
@@ -307,16 +340,21 @@ if not course:
     exit(0)
 
 # auto detect mode
-for c in course.copy():
-    if args.videos:
-        for v in args.videos:
+# 指定了视频 ID 时: 依次拿每个视频去每门课里试, 试成功就把它从待办里摘掉
+# 注意不能一边遍历 args.videos 一边 remove, 那会跳过元素
+if args.videos:
+    pending = list(args.videos)
+    for c in course.copy():
+        for v in list(pending):
             try:
                 fucker.fuckVideo(course_id=c, video_id=v)
                 print(f"fucked {v}")
-                args.videos.remove(v)
+                pending.remove(v)
             except Exception:
                 pass
-    else:
+    args.videos = pending
+else:
+    for c in course.copy():
         try:
             fucker.fuckCourse(course_id=c)
             course.remove(c)

@@ -1,5 +1,5 @@
 from zd_utils import Cipher, getEv, WatchPoint, HOME_KEY, VIDEO_KEY, QA_KEY, AI_KEY, EXAM_KEY
-from utils import progressBar, HMS, wipeLine, list_to_cookie_jar, getRealPath
+from utils import progressBar, HMS, wipeLine, list_to_cookie_jar, getRealPath, terminal_width
 from urllib.parse import unquote_plus as unquote
 from requests.adapters import HTTPAdapter, Retry
 from requests.cookies import RequestsCookieJar
@@ -26,12 +26,21 @@ import os
 from urllib.parse import urlparse
 from urllib.parse import urlencode, parse_qsl, urlsplit, urlunsplit
 from pathlib import Path
-from openai import OpenAI
+try:
+    # 安卓版（buildozer.spec）不打包 openai / tiktoken：
+    # openai 依赖链太重、tiktoken 没有可用的 python-for-android recipe。
+    # 缺失时降级为「AI 课功能不可用」，视频刷课路径完全不受影响。
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
 import threading
 import ast
 import hashlib
 import string
-import tiktoken
+try:
+    import tiktoken
+except Exception:
+    tiktoken = None
 
 """
 ⠄⠄⠄⢰⣧⣼⣯⠄⣸⣠⣶⣶⣦⣾⠄⠄⠄⠄⡀⠄⢀⣿⣿⠄⠄⠄⢸⡇⠄⠄
@@ -443,12 +452,7 @@ class Fucker:
         tprint(f"Fucking Zhidao course: {course.courseInfo.name or course.courseInfo.enName}")
         begin_time = time.time() # real world time
         prefix = self.prefix # prefix for tree-like print
-        try:
-            # 在 nohup 下运行无法获取，进行捕获
-            w_lim = os.get_terminal_size().columns-1 # width limit for terminal output
-        except Exception as e:
-            # 考虑直接移除此变量，但是保留原代码风格，故进行赋值
-            w_lim = 80
+        w_lim = terminal_width() - 1 # width limit for terminal output (无终端时回落 80)
         try:
             for chapter in chapters.videoChapterDtos:
                 tprint(prefix) # extra line as separator
@@ -495,10 +499,10 @@ class Fucker:
         ctx = self.getZhidaoContext(RAC_id)
         self._sessionReady(ctx)
         video = ctx.videos[video_id]
+        if not video:  # ObjDict 取不到 key 时返回空字典, 必须先判断再读字段
+            raise ValueError(f"Video {video_id} not found")
         played_time = video.studyTotalTime
         watch_state = video.watchState
-        if not video:
-            raise ValueError(f"Video {video_id} not found")
         if watch_state == 1 and self.end_thre <= 1.0:  # check end_thre in case someone wants to rewatch
             logger.info(f"Video {video.name} already watched")
             return
@@ -948,12 +952,7 @@ class Fucker:
     def _traverse(self,course_id, node: ObjDict, depth=0):
         depth += 1
         tprint = print if self.tree_view else lambda *a, **k: None
-        try:
-            # 在 nohup 下运行无法获取，进行捕获
-            w_lim = os.get_terminal_size().columns-1 # width limit for terminal output
-        except Exception as e:
-            # 考虑直接移除此变量，但是保留原代码风格，故进行赋值
-            w_lim = 80
+        w_lim = terminal_width() - 1 # width limit for terminal output (无终端时回落 80)
         prefix = self.prefix * depth
         if node.childList: # if childList is not None, then it's a chapter
             chapter = node
@@ -1276,7 +1275,7 @@ class Fucker:
 
             begin_time = time.time()  # real world time
             prefix = self.prefix  # prefix for tree-like print
-            w_lim = os.get_terminal_size().columns-1  # width limit for terminal output
+            w_lim = terminal_width() - 1  # width limit for terminal output (无终端时回落 80)
 
             cakeThemeList = knowledgePoints.cakeThemeList
         except Exception as e:
@@ -1997,7 +1996,13 @@ class Openai:
         self.session = zhiDaosession if zhiDaosession is not None else requests.Session()
         self.useZhidao = useZhidao
 
-        self.encoder = tiktoken.encoding_for_model("gpt-4")
+        # 安卓版可能没有 tiktoken，构造时不报错，真正用到时再提示
+        self.encoder = None
+        if tiktoken is not None:
+            try:
+                self.encoder = tiktoken.encoding_for_model("gpt-4")
+            except Exception:
+                self.encoder = None
 
         self.prefix = "8ZflKEagfL"
 
@@ -2176,6 +2181,10 @@ class Openai:
         return self._baseTemplate(question, choices, referenceMaterials, "判断题")
 
     def generateAnswer(self, prompt: str) -> list:
+        if self.encoder is None:
+            raise RuntimeError(
+                "当前版本未包含 tiktoken，无法使用 AI 答题功能"
+                "（安卓版不支持 AI 课，请用电脑版）。视频课程不受影响。")
         tokens = self.encoder.encode(prompt)
 
         # 如果大于32ktoken，取后32ktoken
@@ -2226,6 +2235,10 @@ class PptToTxt:
         self.__moonShotKey = moonShotKey 
         self.__session = requests.Session()
         self.__download_path = getRealPath("AiDownloadCache")
+        if OpenAI is None:
+            raise RuntimeError(
+                "当前版本未包含 openai 依赖，无法使用 PPT 转文本功能"
+                "（安卓版不支持 AI 课，请用电脑版）。视频课程不受影响。")
         self.__client = OpenAI(
             api_key=self.__moonShotKey,
             base_url="https://api.moonshot.cn/v1",
@@ -2263,10 +2276,27 @@ class PptToTxt:
             logger.error(f"Error processing file from URL {url}: {str(e)}")
             return ""
 
-    def __getFilePath(self, url: str) -> str:
+    def __localPathFor(self, url: str) -> str:
+        """把远端 URL 映射为一个安全的本地文件名
+
+        原实现直接把 URL 的 path 拼进下载目录, 若 URL 里出现 `../`
+        就能写到下载目录之外去。这里只取 basename (分隔符不可能残留),
+        再用 URL 哈希做前缀防重名, 保留中文等可读字符。
+        (`__uploadFile` 本来也是按 basename 缓存的, 这样反而更一致)
+        """
         parsed_url = urlparse(url)
-        file_path = parsed_url.path.lstrip('/')
-        local_path = os.path.join(self.__download_path, file_path)
+        name = os.path.basename(parsed_url.path) or "download"
+        # 只过滤 Windows 非法字符与控制字符, 不做 URL 解码以免还原出路径分隔符
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)
+        name = name.strip(". ") or "download"
+        if name in ("", ".", ".."):
+            name = "download"
+        name = name[:100]  # 防止超长文件名
+        digest = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
+        return os.path.join(self.__download_path, f"{digest}_{name}")
+
+    def __getFilePath(self, url: str) -> str:
+        local_path = self.__localPathFor(url)
 
         if os.path.exists(local_path):
             logger.info(f"File already exists: {local_path}")
@@ -2277,9 +2307,7 @@ class PptToTxt:
     def __downloadFile(self, url: str) -> str:
         response = self.__session.get(url, stream=True)
         if response.status_code == 200:
-            parsed_url = urlparse(url)
-            file_path = parsed_url.path.lstrip('/')
-            local_path = os.path.join(self.__download_path, file_path)
+            local_path = self.__localPathFor(url)
 
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
