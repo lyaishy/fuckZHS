@@ -23,14 +23,20 @@ GitHub 提供免费的云端服务器（叫 GitHub Actions），
   你的仓库   https://github.com/lyaishy/fuckZHS
   构建进度   https://github.com/lyaishy/fuckZHS/actions
 
-前两次跑都失败了，但原因都**跟我们的代码没关系**，已经查清并修好：
+前三次跑都失败了，原因都**跟我们的代码逻辑没关系**，已经查清并修好：
 
   第 1 次：网上的那个第三方打包工具年久失修 —— 它自己的 Docker 镜像
           构建失败（它往新系统上加了一个已经失效的软件源）。
           → 改成直接调用 Kivy 官方镜像。
 
   第 2 次：调用官方镜像时参数多写了一个 buildozer 单词。
-          → 已改对，第 3 次已经进入真正的编译阶段。
+          → 已改对，第 3 次进入真正的编译阶段。
+
+  第 3 次：一路编译到"安装纯 Python 依赖"那一步才挂，报
+          charset_normalizer-3.5.2-cp314-cp314-android_24_arm64_v8a.whl
+          is not a supported wheel on this platform。
+          这是 python-for-android 工具链自身的一个不对称 bug（见坑 8），
+          → 已用"把那个包钉在一个只发通用轮的版本"绕过。
 
   另外顺手挖出两个"装到手机上才发现"的坑（见坑 6、坑 7）：
   依赖里放了没有配方的 pillow，以及代码把安卓上根本不存在的
@@ -204,10 +210,13 @@ A: 能。已经配好了：改动  buildozer.spec  或那个工作流文件并�
   实测 p4a 没有配方的：pillow、requests、urllib3、chardet、idna、certifi
   （后面这几个纯 Python 的不用你操心，Kivy 配方会自动把它们带上）
 
-  另外**不要自己钉版本号**。p4a 官方 CI 每天在测的组合是
+  另外**一般不要自己钉版本号**。p4a 官方 CI 每天在测的组合是
   CPython 3.14.2 + Kivy 2.3.1，这就是它的默认值；
   自己写 `python3==3.11.5,kivy==2.3.0` 反倒是一个没人验证过的组合。
-  最终写的是：requirements = python3,kivy,openssl,pycryptodome
+
+  唯一例外见坑 8：charset-normalizer 必须钉死 3.4.2。
+  最终写的是：
+  requirements = python3,kivy,openssl,pycryptodome,charset-normalizer==3.4.2
 
 【坑 7】安卓上没有 PIL / tiktoken / openai，代码里不能当成必需
 
@@ -219,6 +228,57 @@ A: 能。已经配好了：改动  buildozer.spec  或那个工作流文件并�
   都算成"必需"，这三个在安卓上都不存在 —— 结果就是
   APK 装得上，但一打开就提示缺依赖、界面直接不能用。
   现在必需项只剩 requests 和 pycryptodome。
+
+【坑 8】纯 Python 依赖如果"发布了安卓专用轮"，会被工具链拒绝安装
+
+  现象（第 3 次的失败，日志原话）：
+      [INFO]:  Extra resolved pure python dependencies :
+      [INFO]:      charset-normalizer : 3.5.2
+      [INFO]:  The requirements (certifi, chardet, filetype, idna, requests,
+               six, urllib3, https://files.pythonhosted.org/.../
+               charset_normalizer-3.5.2-cp314-cp314-android_24_arm64_v8a.whl)
+               don't have recipes, attempting to install them with pip
+      ERROR: charset_normalizer-3.5.2-cp314-cp314-android_24_arm64_v8a.whl
+             is not a supported wheel on this platform.
+
+  这一串包是哪来的？不是我们写的，是 Kivy 配方自动带进来的
+  （Kivy 自己的代码里就有 `from filetype import guess_extension`），
+  其中 requests 又依赖 charset-normalizer。
+
+  原因：p4a 处理"没有配方的纯 Python 包"时分两个阶段，**两边参数不一样**：
+
+    ① 解析阶段 —— 参数齐全，选得没错
+       pip3 install certifi chardet filetype idna requests six urllib3
+            --dry-run --only-binary=:all: --report /tmp/xxx
+            --platform=android_24_arm64_v8a --platform=android_24_aarch64
+            --python-version 3.14.2
+       这里明确告诉了 pip"我要装到安卓上"，于是 pip 优先挑中了
+       charset-normalizer 官方发布的**安卓专用轮**（这轮子 PyPI 上真有）。
+
+    ② 安装阶段 —— 参数丢了，必然失败
+       venv/bin/pip install -v --target '...' --no-deps -r requirements.txt
+       注意这条命令里**没有 --platform**。此时 pip 用的是"宿主机自己"的
+       平台标签（linux x86_64），根本不认识 android_24_arm64_v8a 这个标签，
+       于是直接拒绝安装 → 整个构建挂掉。
+
+  所以：**只要某个纯 Python 依赖同时发布了安卓专用轮，就会踩这个坑**；
+  只发通用轮（文件名 py3-none-any.whl）的包则完全没事 ——
+  certifi / urllib3 / idna / chardet / filetype / six / requests 都是通用轮，
+  所以只有 charset-normalizer 一个倒霉。
+
+  处理：把 charset-normalizer 钉在一个**还没有开始发安卓轮**的版本上。
+  官方是从 3.5.x 才开始发 android_24_arm64_v8a 轮的，所以钉 3.4.2
+  （实测 3.3.2 / 3.4.0 / 3.4.2 都只有 py3-none-any 通用轮）。
+  钉住之后，解析和安装两个阶段都只能选通用轮，装到哪个平台都不会被拒。
+  requests 要求 charset_normalizer>=2,<4，3.4.2 满足；纯 Python 包，
+  手机上性能差异可以忽略。
+
+  顺带一提：p4a 是每次构建时现从 GitHub 拉当天 master 的，也就是说它自己
+  会变。所以这类修复必须落在我们自己的 buildozer.spec 里，才长期有效。
+
+  怎么自己查一个包发了哪些轮子？（下次想不通时好用）
+      浏览器打开  https://pypi.org/pypi/包名/版本号/json
+      看里面的 urls 列表，重点看有没有 android 字样的文件名。
 
 
 ========================================================
