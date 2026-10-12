@@ -89,18 +89,22 @@ jobs:
           mkdir -p .buildozer_global
 
           # 说明：
-          #  * 镜像的 entrypoint.sh 会读 hostcwd 的 uid/gid、建同名用户并 chown，
+          #  * 镜像自带的 entrypoint.sh 会读 hostcwd 的 uid/gid、建同名用户并 chown，
           #    再以该用户执行 buildozer —— 所以不需要 --user root。
           #  * 它同时把 HOME 固定成 /home/user，因此 buildozer 的「全局目录」
           #    就是 /home/user/.buildozer，我们把它挂到工作区的 .buildozer_global，
           #    于是 SDK/NDK 才能被 actions/cache 缓存住。
+          #  * ⚠ 参数只写 buildozer 自己的子命令（android debug）。
+          #    镜像 entrypoint 已经在前面接好 buildozer 可执行文件了，
+          #    再多写一个 "buildozer" 会变成 `buildozer buildozer android debug`，
+          #    报 "Unknown command/target buildozer"。
           docker run --rm \
             -e APP_ANDROID_ACCEPT_SDK_LICENSE=1 \
             -e BUILDOZER_WARN_ON_ROOT=0 \
             -v "$GITHUB_WORKSPACE":/home/user/hostcwd \
             -v "$GITHUB_WORKSPACE/.buildozer_global":/home/user/.buildozer \
             ghcr.io/kivy/buildozer:latest \
-            buildozer android debug
+            android debug
 
       - name: 列出产物
         run: ls -la bin/

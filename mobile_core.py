@@ -202,14 +202,24 @@ def _short_url(url, limit=96):
 # 依赖检查
 # --------------------------------------------------------------------------
 def check_env():
-    """导入依赖；返回缺失项列表（空列表 = 一切正常）"""
+    """导入依赖；返回缺失的**必需**依赖列表（空列表 = 一切正常）
+
+    ⚠ 这里只能列「视频刷课」这条主路真正必需的包，也就是 requests 和
+    pycryptodome（AES 加密）。以下三个**必须**当作可选，不能算缺失：
+
+        PIL/Pillow   只在「在终端里用字符画显示二维码」时用（见 utils.py），
+                     手机端二维码画在 Kivy 界面上，走不到那里；
+                     p4a 没有它的配方，安卓上也装不了。
+        tiktoken     只有 AI 课里给文本分词时用；p4a 没有配方（纯 C 扩展）。
+        openai      只有 AI 课调用大模型时用；安卓上同样没有。
+
+    把它们算成缺失的后果很严重：APK 装得上，但一打开就提示缺依赖、
+    界面直接不可用。所以下面的必需清单里只有两项。
+    """
     global Fucker, fucker_module, logger, ObjDict, cookie_jar_to_list
     missing = []
     for mod, pkg in (("requests", "requests"),
-                     ("Crypto", "pycryptodome"),
-                     ("PIL", "Pillow"),
-                     ("tiktoken", "tiktoken"),
-                     ("openai", "openai")):
+                     ("Crypto", "pycryptodome")):
         try:
             __import__(mod)
         except Exception:

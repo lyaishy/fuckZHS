@@ -22,8 +22,19 @@ source.exclude_patterns = *.spec, *.zip, *.exe, *.log, *.pyc, crash.log, .qr_pre
 
 version = 1.0.0
 
-# 依赖：Kivy 2.3.0 与 python-for-android 的 CPython 3.11 是已知可用的组合
-requirements = python3==3.11.5,kivy==2.3.0,openssl,requests,pycryptodome,pillow,urllib3,chardet,idna,certifi
+# 依赖：**每一项都必须能对上 p4a 的配方，或者由别的配方的 python_depends 带进来。**
+# 不钉版本 —— p4a 的默认组合（CPython 3.14.2 + Kivy 2.3.1）才是官方 CI 每天在测的，
+# 自己钉一个旧版本反而是没人验证过的组合。
+#   python3        p4a 配方 ✓
+#   kivy           p4a 配方 ✓，且它的 python_depends 会自动带上
+#                  requests / urllib3 / certifi / chardet / idna / filetype
+#                  （脚本要用的 requests 就是从这里来的，不用自己列）
+#   openssl        p4a 配方 ✓（python3 的依赖）
+#   pycryptodome   p4a 配方 ✓（zd_utils.py 里的 AES 加密要靠它）
+# 注意**不要**写 pillow：p4a 没有它的配方，只能 pip 装到安卓目标上，
+# 而它是 C 扩展，在安卓上装很容易失败。本项目手机端用不到 PIL
+# （结论见 utils.py 顶部：PIL 只用于终端里用字符画显示二维码）。
+requirements = python3,kivy,openssl,pycryptodome
 
 # 首次运行会联网下载需要的库（sh 文件会指名 fork 源码）
 android.permissions = INTERNET, ACCESS_NETWORK_STATE, WAKE_LOCK, POST_NOTIFICATIONS

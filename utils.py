@@ -4,8 +4,26 @@ import io
 import os
 import sys
 from requests.cookies import RequestsCookieJar, create_cookie
-from PIL import Image, ImageOps
 from datetime import timedelta
+
+# Pillow 只在「在终端里用字符画显示二维码」时用得到（见文件下面的
+# showImage / terminalShowImage_*）。手机端二维码是画在 Kivy 界面上的，
+# 根本不会走到这里；而 p4a 没有 pillow 配方，pip 在安卓上装它的 C 扩展
+# 很容易失败。所以这里做成可选依赖：缺了也不影响导入，
+# 真的去调终端显示函数时才报一个能看懂的错。
+try:
+    from PIL import Image, ImageOps
+except Exception:  # pragma: no cover - 仅安卓等没有 Pillow 的环境
+    Image = None
+    ImageOps = None
+
+
+def _require_pillow():
+    if Image is None:
+        raise RuntimeError(
+            "当前环境没有安装 Pillow（安卓端用不到它）。"
+            "这个功能只在电脑终端里显示二维码时才需要。"
+        )
 
 
 def HMS(*args, **kw):
@@ -22,11 +40,13 @@ def showImage(img, show_in_terminal=False, ensure_unicode=False):
             terminalShowImage_tty(img)
     else:
         import threading
+        _require_pillow()
         img = Image.open(io.BytesIO(img))
         threading.Thread(target=img.show).run()
     print("Scan QR code")
 
 def terminalShowImage_unicode(img):
+    _require_pillow()
     img = Image.open(io.BytesIO(img))
     qr = img.resize((47,47), Image.Resampling.NEAREST)
     qr = ImageOps.grayscale(qr)
@@ -47,6 +67,7 @@ def terminalShowImage_unicode(img):
     print(chars[0]*49)
 
 def terminalShowImage_tty(img):
+    _require_pillow()
     img = Image.open(io.BytesIO(img))
     qr = img.resize((47,47), Image.Resampling.NEAREST)
     qr = ImageOps.grayscale(qr)
