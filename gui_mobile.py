@@ -87,14 +87,34 @@ _FONT_CANDIDATES = [
     "NotoSansCJK-Regular.ttc",
     "/system/fonts/NotoSansCJK-Regular.ttc",
     "/system/fonts/DroidSansFallbackFull.ttf",
+    "/system/fonts/NotoSansSC-Regular.otf",
+    "/system/fonts/HarmonyOS_Sans_SC_Regular.ttf",
+    "/system/fonts/MiSans-Regular.ttf",
     "C:/Windows/Fonts/msyh.ttc",
     "C:/Windows/Fonts/msyh.ttf",
     "msyh.ttf",
 ]
 
+# 扫描 /system/fonts 时用来判断"这个字体大概认识中文"的线索词。
+# 各品牌 ROM 的中文字体名差异很大（华为用 HarmonyOS_Sans / 小米用 MiSans /
+# 老机器用 DroidSansFallback），只赌固定路径很容易在某个品牌上满屏方块，
+# 所以固定路径都找不到时，再按这些线索扫一遍系统字体目录。
+_CJK_HINTS = ("cjk", "fallback", "harmonyos", "misans", "sourcehan",
+              "notosanssc", "notosanstc", "notosanshans", "droidsanschinese",
+              "hwfonts", "emui", "sourcehansans", "zh", "chinese")
+
+# 安卓上的系统字体目录（ANDROID_ROOT 一般就是 /system）
+def _system_font_dirs():
+    dirs = ["/system/fonts", "/system/font"]
+    root = os.environ.get("ANDROID_ROOT")
+    if root:
+        dirs.append(os.path.join(root, "fonts"))
+    return dirs
+
 
 def register_cjk_font():
-    """注册中文字体，返回可用字体名（失败则用默认）"""
+    """注册中文字体，返回可用字体名（实在找不到就用 Kivy 默认）"""
+    # ① 先试明确列出的路径
     for path in _FONT_CANDIDATES:
         try:
             if path in ("NotoSansCJK-Regular.ttc", "msyh.ttf"):
@@ -105,6 +125,22 @@ def register_cjk_font():
                 return "cjk"
         except Exception:
             continue
+
+    # ② 再扫系统字体目录，按线索词挑一个中文字体
+    for d in _system_font_dirs():
+        try:
+            if not os.path.isdir(d):
+                continue
+            for fn in sorted(os.listdir(d)):
+                low = fn.lower()
+                if not low.endswith((".ttf", ".ttc", ".otf")):
+                    continue
+                if any(h in low for h in _CJK_HINTS):
+                    LabelBase.register(name="cjk", fn_regular=os.path.join(d, fn))
+                    return "cjk"
+        except Exception:
+            continue
+
     return "Roboto"
 
 

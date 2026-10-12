@@ -173,6 +173,40 @@ A: 能。已经配好了：改动  buildozer.spec  或那个工作流文件并�
   那样 GitHub 上的云端构建拿不到配方文件，直接失败。
   已加白名单放行。
 
+【坑 5】官方镜像的参数不要自己再写一遍 buildozer
+
+  官方镜像启动脚本内部已经接好了 buildozer 这个可执行文件，
+  你在 docker 命令最后写的参数，就是 buildozer 自己的子命令。
+  写 `buildozer android debug` 会变成 `buildozer buildozer android debug`，
+  报错：Unknown command/target buildozer
+  正确写法就是 `android debug`。
+
+【坑 6】requirements 里不要放没有配方的包
+
+  buildozer 的 requirements 每一项都优先去找 python-for-android 的"配方"
+  （配方 = 一套能在安卓上把它交叉编译出来的脚本）。
+  找不到配方的包只能走 pip 装到安卓目标上，而带 C 扩展的包基本装不上。
+
+  实测 p4a 有配方的：python3、kivy、openssl、pycryptodome
+  实测 p4a 没有配方的：pillow、requests、urllib3、chardet、idna、certifi
+  （后面这几个纯 Python 的不用你操心，Kivy 配方会自动把它们带上）
+
+  另外**不要自己钉版本号**。p4a 官方 CI 每天在测的组合是
+  CPython 3.14.2 + Kivy 2.3.1，这就是它的默认值；
+  自己写 `python3==3.11.5,kivy==2.3.0` 反倒是一个没人验证过的组合。
+  最终写的是：requirements = python3,kivy,openssl,pycryptodome
+
+【坑 7】安卓上没有 PIL / tiktoken / openai，代码里不能当成必需
+
+  本项目 utils.py 顶层 import 了 PIL，而 p4a 没有 pillow 配方。
+  查下来 PIL 只用在"在电脑终端里用字符画显示二维码"，
+  手机端二维码是画在 Kivy 界面上的，根本走不到 → 改成可选导入。
+
+  更要命的是 mobile_core 里的依赖自检原来把 PIL / tiktoken / openai
+  都算成"必需"，这三个在安卓上都不存在 —— 结果就是
+  APK 装得上，但一打开就提示缺依赖、界面直接不能用。
+  现在必需项只剩 requests 和 pycryptodome。
+
 
 ========================================================
 附：涉及的文件（给你对照）
