@@ -14,6 +14,22 @@ GitHub 提供免费的云端服务器（叫 GitHub Actions），
 
 
 ========================================================
+★ 已经替你做到哪一步了（先看这里）
+========================================================
+
+代码已经推到你的仓库了，第一批打包也已经跑起来。
+你只需要等它跑完，然后下载 APK —— 也就是只看「第四步」。
+
+  你的仓库   https://github.com/lyaishy/fuckZHS
+  构建进度   https://github.com/lyaishy/fuckZHS/actions
+
+第一次跑的时候失败过一次，原因跟我们的代码无关：
+GitHub 用的那个第三方打包工具年久失修，它自己的 Docker 镜像构建失败了。
+已经改成直接调用 Kivy 官方的镜像，第二次已经正常跑起来。
+细节见文末「曾经踩过的坑」。
+
+
+========================================================
 第一步 · 把代码放到你自己的 GitHub 账号下
 ========================================================
 
@@ -106,6 +122,56 @@ A: ⚠ 一个重要提醒：安卓系统的省电策略可能会在长时间后�
 Q: 能不能改成每次推送代码就自动打包？
 A: 能。已经配好了：改动  buildozer.spec  或那个工作流文件并推送时，
    会自动触发一次打包。平时手动点 Run workflow 也行。
+
+
+========================================================
+曾经踩过的坑（留个记录，以后你自己再看网络教程时会对得上）
+========================================================
+
+【坑 1】第一版工作流用了网上的 buildozer-action，第二次步骤就红叉
+
+  现象：日志里
+      Err:6 https://ppa.launchpadcontent.net/openjdk-r/ppa/ubuntu resolute Release
+        404  Not Found
+      Error: The repository '...resolute Release' does not have a Release file.
+      ERROR: process "/bin/sh -c sudo apt update" ... exit code: 100
+      ##[error]Docker build failed with exit code 1
+
+  原因：那个 action 的 Dockerfile 是
+      FROM ghcr.io/kivy/buildozer:latest
+  也就是直接用 Kivy 官方镜像做底，然后在上面**又**加装了一遍 JDK，
+  加装用的是 ubuntu 的 ppa:openjdk-r/ppa 这个软件源。
+  但官方镜像的基础系统已经滚动到新版（代号 resolute），
+  这个老 PPA 根本没有对应新版的文件，apt 一更新就报错，
+  镜像都构建不出来 —— 所以任务在第 2 步就挂了，后面全被跳过。
+
+  关键点：官方镜像本身**已经装好了 openjdk-17-jdk**，那一步纯属多余。
+
+  处理：不再用那个第三方 action，直接调官方镜像，见工作流里
+  「用官方 Kivy 镜像打包」那一步。官方镜像自带的 entrypoint.sh
+  会把容器用户的 uid/gid 映射成宿主机的，并把 HOME 固定为 /home/user，
+  所以我们只要挂两个目录：
+      -v "$GITHUB_WORKSPACE":/home/user/hostcwd              项目本体
+      -v "$GITHUB_WORKSPACE/.buildozer_global":/home/user/.buildozer
+                                                         ↓ 这样 SDK/NDK 才能被缓存
+
+【坑 2】python-for-android 的入口名改不了
+
+  它永远执行应用目录下的 main.py。buildozer.spec 里的 android.entrypoint
+  是 Java 类名，不是 Python 文件名，改它没用。
+  所以本项目在 main.py 最顶部做了环境判断：安卓下直接拉起手机界面。
+
+【坑 3】fucker.py 顶层 import 了 openai 和 tiktoken
+
+  这俩包没进 requirements（tiktoken 在安卓上也没有现成配方），
+  不处理的话 APK 装得上、一点「开始刷课」就崩。
+  已改成"可选依赖 + 优雅降级"：视频刷课路径完全不受影响，
+  只有 AI 课那条路会在缺失时给出明确提示。
+
+【坑 4】.gitignore 里的 *.spec 会把 buildozer.spec 一起忽略掉
+
+  那样 GitHub 上的云端构建拿不到配方文件，直接失败。
+  已加白名单放行。
 
 
 ========================================================
