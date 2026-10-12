@@ -41,12 +41,6 @@ jobs:
       - name: 取出代码
         uses: actions/checkout@v4
 
-      - name: 选择要打的架构
-        if: env.TARGET_ARCH != 'both'
-        run: |
-          sed -i "s|^android.archs = .*|android.archs = ${TARGET_ARCH}|" buildozer.spec
-          echo "本次架构：" && grep -n "^android.archs" buildozer.spec
-
       # ✅ 安全闸门：个人数据绝不能进 APK。
       # 这些文件都被 .gitignore 排除，正常 checkout 不会出现；
       # 万一哪天被误提交，这里直接让构建失败，而不是打出带凭据的包。
@@ -63,6 +57,7 @@ jobs:
           exit "$bad"
 
       # 缓存 Android SDK / NDK（约 2~3 GB）。命中后能省 20~30 分钟。
+      # 注意：这一步必须放在「改架构」之前，否则 key 会随架构变化而失效。
       - name: 缓存 Android SDK / NDK
         uses: actions/cache@v4
         with:
@@ -71,12 +66,41 @@ jobs:
           restore-keys: |
             buildozer-global-${{ runner.os }}-
 
-      - name: 用 Buildozer 打包（首次约 40~70 分钟，之后会快很多）
-        uses: ArtemSBulgakov/buildozer-action@v1
-        id: buildozer
-        with:
-          command: buildozer android debug
-          buildozer_version: stable
+      - name: 选择要打的架构
+        if: env.TARGET_ARCH != 'both'
+        run: |
+          sed -i "s|^android.archs = .*|android.archs = ${TARGET_ARCH}|" buildozer.spec
+          echo "本次架构：" && grep -n "^android.archs" buildozer.spec
+
+      # ------------------------------------------------------------------
+      # 为什么不用 ArtemSBulgakov/buildozer-action：
+      #   它的 Dockerfile 是 `FROM ghcr.io/kivy/buildozer:latest`，然后在上面
+      #   补装 JDK —— 但补装用的是已经失效的 PPA（ppa:openjdk-r/ppa），
+      #   新基础镜像（ubuntu 26.04 / resolute）里没有对应 Release 文件，
+      #   `apt update` 直接 100 退出，镜像根本构不出来。
+      #   而官方镜像本身已经自带 openjdk-17-jdk，那一步纯属多余。
+      #   所以这里直接调官方镜像，绕过那个年久失修的 action。
+      # ------------------------------------------------------------------
+      - name: 用官方 Kivy 镜像打包（首次约 40~70 分钟）
+        run: |
+          set -euo pipefail
+
+          # 预先建好，保证宿主机侧属主是 runner，方便后面 actions/cache 读写
+          mkdir -p .buildozer_global
+
+          # 说明：
+          #  * 镜像的 entrypoint.sh 会读 hostcwd 的 uid/gid、建同名用户并 chown，
+          #    再以该用户执行 buildozer —— 所以不需要 --user root。
+          #  * 它同时把 HOME 固定成 /home/user，因此 buildozer 的「全局目录」
+          #    就是 /home/user/.buildozer，我们把它挂到工作区的 .buildozer_global，
+          #    于是 SDK/NDK 才能被 actions/cache 缓存住。
+          docker run --rm \
+            -e APP_ANDROID_ACCEPT_SDK_LICENSE=1 \
+            -e BUILDOZER_WARN_ON_ROOT=0 \
+            -v "$GITHUB_WORKSPACE":/home/user/hostcwd \
+            -v "$GITHUB_WORKSPACE/.buildozer_global":/home/user/.buildozer \
+            ghcr.io/kivy/buildozer:latest \
+            buildozer android debug
 
       - name: 列出产物
         run: ls -la bin/
