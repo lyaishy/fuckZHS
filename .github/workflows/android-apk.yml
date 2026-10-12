@@ -26,6 +26,12 @@ concurrency:
   group: apk-${{ github.ref }}
   cancel-in-progress: true
 
+# 失败时要把日志尾巴贴成 commit 评论，需要写内容的权限；
+# 其余权限按最小原则给（cache / upload-artifact 用的是运行时令牌，不受这里影响）。
+permissions:
+  contents: write
+  actions: write
+
 jobs:
   build-apk:
     name: 打包 APK
@@ -104,7 +110,37 @@ jobs:
             -v "$GITHUB_WORKSPACE":/home/user/hostcwd \
             -v "$GITHUB_WORKSPACE/.buildozer_global":/home/user/.buildozer \
             ghcr.io/kivy/buildozer:latest \
-            android debug
+            android debug 2>&1 | tee build.log
+
+      # 构建失败时，把日志最后 250 行贴成一条 commit 评论。
+      # 为什么这么做：公开仓库的 Actions 日志接口**匿名也是 403**，
+      # 一旦手上没有有效令牌就完全看不到失败原因；而 commit 评论对公开仓库
+      # 是可以匿名读的（GET /repos/{owner}/{repo}/commits/{sha}/comments）。
+      # 这样失败原因永远留痕、随时能查，不依赖任何人手里的令牌。
+      - name: 失败时公开日志尾巴（无需令牌即可查阅）
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ ! -f build.log ]; then
+            echo "没有 build.log（可能在更早的步骤就失败了）"
+            exit 0
+          fi
+          tail -n 250 build.log > build_tail.txt
+          echo "----- 日志最后 250 行 -----"
+          cat build_tail.txt
+          echo "---------------------------"
+          {
+            echo "本次打包失败，下面是日志最后 250 行（自动生成，方便无令牌时查因）"
+            echo '```'
+            cat build_tail.txt
+            echo '```'
+          } > comment.md
+          jq -Rs '{body: .}' comment.md > payload.json
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+            --input payload.json \
+            || echo "贴评论失败，不影响本次结论"
 
       - name: 列出产物
         run: ls -la bin/
